@@ -922,7 +922,9 @@ int main(int argc, char *argv[]) {
 				final_path_component(arguments.file_names.front()).c_str() : long_machine_name.c_str(),
 			SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
 			400, 300,
-			SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE
+			SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE |
+				// CLK_HIDDEN: no window on screen, for batches of scripted runs.
+				(std::getenv("CLK_HIDDEN") ? SDL_WINDOW_HIDDEN : 0)
 		);
 		if(window) {
 			gl_context = SDL_GL_CreateContext(window);
@@ -1086,6 +1088,26 @@ int main(int argc, char *argv[]) {
 	for(size_t at; (at = type_text.find("\\n")) != std::string::npos; ) type_text.replace(at, 2, "\n");
 	const char *const type_after = std::getenv("CLK_TYPE_AFTER");
 	const Uint32 type_at = SDL_GetTicks() + Uint32((type_after && *type_after ? std::atof(type_after) : 2.0) * 1000.0);
+	// CLK_SCRIPT: more text to type later, as "seconds:text|seconds:text|..."
+	// (wall-clock seconds from start; \n becomes Return).
+	std::vector<std::pair<Uint32, std::string>> script;
+	if(const char *const text = std::getenv("CLK_SCRIPT"); text && *text) {
+		std::string all = text;
+		const Uint32 start = SDL_GetTicks();
+		for(size_t begin = 0; begin < all.size();) {
+			size_t end = all.find('|', begin);
+			if(end == std::string::npos) end = all.size();
+			const std::string entry = all.substr(begin, end - begin);
+			const size_t colon = entry.find(':');
+			if(colon != std::string::npos) {
+				std::string words = entry.substr(colon + 1);
+				for(size_t at; (at = words.find("\\n")) != std::string::npos; ) words.replace(at, 2, "\n");
+				script.emplace_back(start + Uint32(std::atof(entry.substr(0, colon).c_str()) * 1000.0), words);
+			}
+			begin = end + 1;
+		}
+	}
+	size_t script_next = 0;
 	machine_runner.start();
 	while(!should_quit) {
 		if(quit_at && SDL_GetTicks() >= quit_at) should_quit = true;
@@ -1096,6 +1118,14 @@ int main(int argc, char *argv[]) {
 				typer->type_string(converter.from_bytes(type_text));
 			}
 			type_text.clear();
+		}
+		if(script_next < script.size() && SDL_GetTicks() >= script[script_next].first) {
+			std::lock_guard type_lock(machine_mutex);
+			if(const auto typer = machine->keyboard_machine()) {
+				std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+				typer->type_string(converter.from_bytes(script[script_next].second));
+			}
+			++script_next;
 		}
 		// Draw a new frame, indicating completion of the draw to the machine runner.
 		scan_target.update(int(window_width), int(window_height));
