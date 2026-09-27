@@ -1082,6 +1082,21 @@ int main(int argc, char *argv[]) {
 	const char *const quit_after = std::getenv("CLK_QUIT_AFTER");
 	const Uint32 quit_at = (quit_after && *quit_after) ?
 		SDL_GetTicks() + Uint32(std::atof(quit_after) * 1000.0) : 0;
+	// CLK_EMULATED_HZ: the CPU's clock rate. With it, CLK_QUIT_AFTER and CLK_SCRIPT
+	// times are emulated seconds, measured by the cycles the access log counts,
+	// so a run that gets less of the host's CPU is slower, not shorter.
+	const char *const emulated_hz_text = std::getenv("CLK_EMULATED_HZ");
+	const double emulated_hz = emulated_hz_text && *emulated_hz_text ? std::atof(emulated_hz_text) : 0.0;
+	if(emulated_hz > 0.0) CPU::MOS6502Esque::access_log.enabled = true;
+	const auto emulated_ms = [&]() -> Uint32 {
+		return Uint32(double(CPU::MOS6502Esque::access_log.cycles.load()) * 1000.0 / emulated_hz);
+	};
+	const Uint32 emulated_quit_at = (emulated_hz > 0.0 && quit_after && *quit_after) ?
+		Uint32(std::atof(quit_after) * 1000.0) : 0;
+	// The window loop may notice the time is up late; the log stops on time.
+	if(emulated_quit_at) {
+		CPU::MOS6502Esque::access_log.cycle_limit = uint64_t(std::atof(quit_after) * emulated_hz);
+	}
 	// CLK_TYPE: text to type once the machine has started (after CLK_TYPE_AFTER
 	// seconds, default 2), for scripted runs. A literal \n in it becomes Return.
 	std::string type_text = std::getenv("CLK_TYPE") ? std::getenv("CLK_TYPE") : "";
@@ -1093,7 +1108,7 @@ int main(int argc, char *argv[]) {
 	std::vector<std::pair<Uint32, std::string>> script;
 	if(const char *const text = std::getenv("CLK_SCRIPT"); text && *text) {
 		std::string all = text;
-		const Uint32 start = SDL_GetTicks();
+		const Uint32 start = emulated_hz > 0.0 ? 0 : SDL_GetTicks();
 		for(size_t begin = 0; begin < all.size();) {
 			size_t end = all.find('|', begin);
 			if(end == std::string::npos) end = all.size();
@@ -1110,7 +1125,9 @@ int main(int argc, char *argv[]) {
 	size_t script_next = 0;
 	machine_runner.start();
 	while(!should_quit) {
-		if(quit_at && SDL_GetTicks() >= quit_at) should_quit = true;
+		if(emulated_quit_at) {
+			if(emulated_ms() >= emulated_quit_at) should_quit = true;
+		} else if(quit_at && SDL_GetTicks() >= quit_at) should_quit = true;
 		if(!type_text.empty() && SDL_GetTicks() >= type_at) {
 			std::lock_guard type_lock(machine_mutex);
 			if(const auto typer = machine->keyboard_machine()) {
@@ -1119,7 +1136,8 @@ int main(int argc, char *argv[]) {
 			}
 			type_text.clear();
 		}
-		if(script_next < script.size() && SDL_GetTicks() >= script[script_next].first) {
+		if(script_next < script.size() &&
+			(emulated_hz > 0.0 ? emulated_ms() : SDL_GetTicks()) >= script[script_next].first) {
 			std::lock_guard type_lock(machine_mutex);
 			if(const auto typer = machine->keyboard_machine()) {
 				std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;

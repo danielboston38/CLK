@@ -29,6 +29,7 @@
 #include "6502Esque.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -46,6 +47,8 @@ struct AccessLog {
 	std::array<uint8_t, 65536> memory{};
 	std::array<std::array<uint16_t, 4>, 65536> readers{};
 	uint16_t instruction = 0;	// where the instruction now running began
+	std::atomic<uint64_t> cycles{0};	// bus cycles so far: emulated time
+	uint64_t cycle_limit = 0;	// if set, nothing after this many cycles is recorded
 	std::string path, memory_path, readers_path;
 	bool enabled = false;
 
@@ -70,6 +73,7 @@ struct AccessLog {
 
 	/// Called after each bus operation, with the value read or written.
 	void record(const BusOperation operation, const uint16_t address, const uint8_t *const value) {
+		if(cycles.fetch_add(1, std::memory_order_relaxed) >= cycle_limit && cycle_limit) return;
 		switch(operation) {
 			case BusOperation::ReadOpcode:
 				flags[address] |= Executed;
