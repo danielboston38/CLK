@@ -14,6 +14,7 @@
 #include <cstdint>
 
 #include "Processors/6502Esque/6502Esque.hpp"
+#include "Processors/6502Esque/AccessLog.hpp"
 #include "Processors/6502Esque/Implementation/LazyFlags.hpp"
 #include "Numeric/Carry.hpp"
 #include "Numeric/RegisterSizes.hpp"

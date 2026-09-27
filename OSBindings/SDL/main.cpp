@@ -6,6 +6,7 @@
 //  Copyright 2017 Thomas Harte. All rights reserved.
 //
 
+#include "Processors/6502Esque/AccessLog.hpp"
 #include "Analyser/Static/StaticAnalyser.hpp"
 #include "Machines/Utility/MachineForTarget.hpp"
 
@@ -930,16 +931,25 @@ int main(int argc, char *argv[]) {
 
 	// Try to get an OpenGL ES context first; this is preferable since it's slightly more direct in driver terms on
 	// Wayland, and is hardware accelerated on Raspberry Pis and similar whereas regular OpenGL isn't necessarily.
+	//
+	// Not on the Mac: there SDL (via sdl2-compat on SDL3, at least) can hand back an ES
+	// context whose GLSL ES shaders then fail to compile, and the 3.2 fallback below is
+	// never reached. macOS supports 3.2 core directly.
+#if !defined(__APPLE__)
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
 	create_window();
+#endif
 
 	if(!window || !gl_context) {
 		// Fallback: OpenGL 3.2. This might be supported even if ES isn't, e.g. on the Mac.
 		SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
 		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
 		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+#if defined(__APPLE__)
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
+#endif
 		create_window();
 	}
 
@@ -1062,11 +1072,31 @@ int main(int argc, char *argv[]) {
 	};
 	std::vector<KeyPress> keypresses;
 
-	// Run the main event loop until the OS tells us to quit.
+	// Run the main event loop until the OS tells us to quit, or until
+	// CLK_QUIT_AFTER seconds have passed (for scripted runs, e.g. to collect a
+	// CLK_ACCESS_LOG).
 	bool should_quit = false;
 	Uint32 fullscreen_mode = 0;
+	const char *const quit_after = std::getenv("CLK_QUIT_AFTER");
+	const Uint32 quit_at = (quit_after && *quit_after) ?
+		SDL_GetTicks() + Uint32(std::atof(quit_after) * 1000.0) : 0;
+	// CLK_TYPE: text to type once the machine has started (after CLK_TYPE_AFTER
+	// seconds, default 2), for scripted runs. A literal \n in it becomes Return.
+	std::string type_text = std::getenv("CLK_TYPE") ? std::getenv("CLK_TYPE") : "";
+	for(size_t at; (at = type_text.find("\\n")) != std::string::npos; ) type_text.replace(at, 2, "\n");
+	const char *const type_after = std::getenv("CLK_TYPE_AFTER");
+	const Uint32 type_at = SDL_GetTicks() + Uint32((type_after && *type_after ? std::atof(type_after) : 2.0) * 1000.0);
 	machine_runner.start();
 	while(!should_quit) {
+		if(quit_at && SDL_GetTicks() >= quit_at) should_quit = true;
+		if(!type_text.empty() && SDL_GetTicks() >= type_at) {
+			std::lock_guard type_lock(machine_mutex);
+			if(const auto typer = machine->keyboard_machine()) {
+				std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+				typer->type_string(converter.from_bytes(type_text));
+			}
+			type_text.clear();
+		}
 		// Draw a new frame, indicating completion of the draw to the machine runner.
 		scan_target.update(int(window_width), int(window_height));
 		scan_target.draw(int(window_width), int(window_height));
@@ -1405,6 +1435,9 @@ int main(int argc, char *argv[]) {
 			}
 		}
 	}
+	// Write the access log before anything is torn down.
+	CPU::MOS6502Esque::access_log.write();
+
 
 	// Clean up.
 	machine_runner.stop();	// Ensure no further updates will occur.

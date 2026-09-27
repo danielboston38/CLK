@@ -41,6 +41,9 @@ void Processor<personality, T, uses_ready_line>::run_for(const Cycles cycles) {
 	const auto bus_access = [&]() -> bool {
 		interrupt_requests_ = (interrupt_requests_ & ~InterruptRequestFlags::IRQ) | irq_request_history_;
 		irq_request_history_ = irq_line_ & flags_.inverse_interrupt;
+		if(MOS6502Esque::access_log.enabled) {
+			MOS6502Esque::access_log.record(next_bus_operation_, bus_address_);
+		}
 		number_of_cycles -= bus_handler_.perform_bus_operation(next_bus_operation_, bus_address_, bus_value_);
 		next_bus_operation_ = BusOperation::None;
 		return number_of_cycles <= Cycles(0);
