@@ -10,6 +10,7 @@
 
 #include "Processors/6502Mk2/Decoder.hpp"
 #include "Processors/6502Mk2/Perform.hpp"
+#include "Processors/6502Esque/AccessLog.hpp"
 
 #include <cassert>
 
@@ -18,6 +19,24 @@
 //		https://github.com/CompuSAR/sar6502/blob/master/sar6502.srcs/sim_1/new/test_plan.mem
 
 namespace CPU::MOS6502Mk2 {
+
+// The names line up with CPU::MOS6502Esque::BusOperation but the two enums are
+// declared separately (Mk2 also distinguishes InternalOperationRead/Write), so
+// map explicitly rather than relying on matching ordinals.
+inline CPU::MOS6502Esque::BusOperation to_esque_bus_operation(const BusOperation op) {
+	using Esque = CPU::MOS6502Esque::BusOperation;
+	switch(op) {
+		case BusOperation::Read:					return Esque::Read;
+		case BusOperation::ReadOpcode:				return Esque::ReadOpcode;
+		case BusOperation::ReadProgram:				return Esque::ReadProgram;
+		case BusOperation::ReadVector:				return Esque::ReadVector;
+		case BusOperation::InternalOperationRead:	return Esque::InternalOperationRead;
+		case BusOperation::Ready:					return Esque::Ready;
+		case BusOperation::Write:					return Esque::Write;
+		case BusOperation::InternalOperationWrite:	return Esque::InternalOperationWrite;
+		default:									return Esque::None;
+	}
+}
 
 template <Model model, typename Traits>
 void Processor<model, Traits>::restart_operation_fetch() {
@@ -80,13 +99,25 @@ void Processor<model, Traits>::run_for(const Cycles cycles) {
 		if constexpr (is_read(type)) {																	\
 			if constexpr (std::is_same_v<decltype(value), Data::Writeable>) {							\
 				Storage::cycles_ -= Storage::bus_handler_.template perform<type>(addr, value);			\
+				if(MOS6502Esque::access_log.enabled) {													\
+					const uint8_t romscribe_byte_ = uint8_t(value);									\
+					MOS6502Esque::access_log.record(to_esque_bus_operation(type), uint16_t(addr), &romscribe_byte_);	\
+				}																						\
 			} else {																					\
 				Data::Writeable target;																	\
 				Storage::cycles_ -= Storage::bus_handler_.template perform<type>(addr, target);			\
 				WriteableReader::assign(value, target);													\
+				if(MOS6502Esque::access_log.enabled) {													\
+					const uint8_t romscribe_byte_ = uint8_t(target);									\
+					MOS6502Esque::access_log.record(to_esque_bus_operation(type), uint16_t(addr), &romscribe_byte_);	\
+				}																						\
 			}																							\
 		} else {																						\
 			Storage::cycles_ -= Storage::bus_handler_.template perform<type>(addr, value);				\
+			if(MOS6502Esque::access_log.enabled) {														\
+				const uint8_t romscribe_byte_ = uint8_t(value);										\
+				MOS6502Esque::access_log.record(to_esque_bus_operation(type), uint16_t(addr), &romscribe_byte_);	\
+			}																							\
 		}																								\
 		__VA_ARGS__;																					\
 	}
