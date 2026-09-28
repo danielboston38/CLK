@@ -10,9 +10,13 @@
 //    bit 0  an instruction was fetched here (SYNC / ReadOpcode)
 //    bit 1  read in any other way (operands, data, dummy reads)
 //    bit 2  written
-//    bit 3  written after it had been executed or read: what ran or was read
-//           there is not necessarily what is there now
-//  Addresses are as the CPU sees them, so bank switching is not distinguished.
+//    bit 3  written after it had been executed or read; that write cleared
+//           bits 0, 1 and 4 and the readers, so they cover only the uses of
+//           the last value written (the one in the memory dump)
+//    bit 4  reached auxiliary RAM rather than main (Apple IIe), so what the
+//           CPU saw there may not be the main-memory byte
+//  Addresses are as the CPU sees them, so bank switching is otherwise not
+//  distinguished.
 //
 //  CLK_READERS names another: for each address, up to 4 little-endian 16-bit
 //  addresses of instructions that read it other than as an opcode (0: none),
@@ -42,6 +46,7 @@ struct AccessLog {
 	static constexpr uint8_t Read = 0x02;
 	static constexpr uint8_t Written = 0x04;
 	static constexpr uint8_t ChangedAfterUse = 0x08;
+	static constexpr uint8_t Aux = 0x10;
 
 	std::array<uint8_t, 65536> flags{};
 	std::array<uint8_t, 65536> memory{};
@@ -90,7 +95,12 @@ struct AccessLog {
 				}
 			} break;
 			case BusOperation::Write:
-				if(flags[address] & (Executed | Read)) flags[address] |= ChangedAfterUse;
+				// Uses before this write were of another value: forget them, so the
+				// flags and readers describe the value that ends up in the dump.
+				if(flags[address] & (Executed | Read)) {
+					flags[address] = ChangedAfterUse;
+					readers[address] = {};
+				}
 				flags[address] |= Written;
 				break;
 			default: return;

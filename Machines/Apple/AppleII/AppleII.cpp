@@ -733,6 +733,16 @@ public:
 				if(write_pages_[address >> 8]) write_pages_[address >> 8][address & 0xff] = *value;
 			}
 
+			// The access log records CPU addresses, so mark those that reached auxiliary RAM:
+			// main and auxiliary memory there can hold different things.
+			if(CPU::MOS6502Esque::access_log.enabled && operation != CPU::MOS6502::BusOperation::None) {
+				const uint8_t *const page =
+					is_read(operation) ? read_pages_[address >> 8] : write_pages_[address >> 8];
+				if(page >= aux_ram_ && page < aux_ram_ + sizeof(aux_ram_)) {
+					CPU::MOS6502Esque::access_log.flags[address] |= CPU::MOS6502Esque::AccessLog::Aux;
+				}
+			}
+
 			if(is_iie(model)) {
 				auxiliary_switches_.access(address, is_read(operation));
 			}
